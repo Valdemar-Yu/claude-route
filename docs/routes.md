@@ -23,7 +23,7 @@ claude-accounts doctor              # 检查 token、隔离和同账号冲突
 claude-accounts refresh 00          # 换掉 00 号的 token
 ```
 
-`add` 时自己起名字和命令后缀；`claude-accounts` 二进制旁边会多一个 `claude-<后缀>` 启动器（指向主二进制的软链接），等价于 `launch <后缀>`。上游 README 的例子是 `claude-gmail`、`claude-naver`，本文用 `00` 当后缀举例。
+`add` 时自己起名字和命令后缀；`claude-<后缀>` 启动器是 `claude-accounts` 旁边指向它的软链接，等价于 `launch <后缀>`；它由不带参数运行的 `claude-accounts`（交互式管理器）创建，`add` 子命令不会建，加完账号后运行一次管理器即可。上游 README 的例子是 `claude-gmail`、`claude-naver`，本文用 `00` 当后缀举例。
 
 如果你要自己包一层启动脚本，核心就是上面两个变量，加一条：不要继承 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、`CLAUDE_CODE_USE_BEDROCK` 之类的变量，否则订阅会被 API key 顶掉。macOS/Linux 用 [examples/claude-account.sh](../examples/claude-account.sh)，Windows 用 [examples/claude-account.cmd](../examples/claude-account.cmd)；两个脚本都清掉同样的五个变量，再交给 `claude-accounts launch`。
 
