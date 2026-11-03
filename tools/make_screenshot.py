@@ -5,7 +5,8 @@ The screenshot has to be reproducible from the current code, otherwise it
 drifts: the first hand-taken screenshot still showed the -496%/h bug that the
 window filter fixed, and the pre-rename panel title.
 
-    python tools/make_screenshot.py
+    python tools/make_screenshot.py              # light, the default
+    python tools/make_screenshot.py --theme dark
 
 No network, no claude-accounts state, no real account data: the pool below is
 built in a temp directory and thrown away.
@@ -13,6 +14,7 @@ built in a temp directory and thrown away.
 
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import os
@@ -38,8 +40,51 @@ FONT_SIZE = 16
 LINE_HEIGHT = 23
 PADDING = 20
 RADIUS = 12
-BACKGROUND = (27, 27, 27, 255)
-FOREGROUND = (212, 212, 212)
+
+PALETTES = {
+    "light": {
+        "background": (250, 249, 246, 255),
+        "foreground": (47, 47, 47),
+    },
+    "dark": {
+        "background": (27, 27, 27, 255),
+        "foreground": (212, 212, 212),
+    },
+}
+
+PALETTE = PALETTES["light"]
+LIGHT = True
+
+# rich resolves "white", "green" and friends from its own palette, so a Theme
+# override never reaches them: "bold white" stays pure white and disappears on
+# a light background. Remap the resolved RGB instead.
+LIGHT_COLORS = {
+    (255, 255, 255): (31, 31, 31),      # white        -> near black
+    (13, 188, 121): (21, 127, 107),     # green        -> teal
+    (0, 128, 0): (21, 127, 107),
+    (0, 255, 0): (18, 160, 136),        # bright_green
+    (229, 229, 16): (138, 97, 0),       # yellow
+    (255, 255, 0): (138, 97, 0),
+    (205, 49, 49): (191, 59, 43),       # red
+    (241, 76, 76): (191, 59, 43),
+    (255, 0, 0): (191, 59, 43),
+    (17, 168, 205): (15, 126, 168),     # cyan
+    (41, 184, 219): (15, 126, 168),
+    (0, 255, 255): (15, 126, 168),
+}
+
+
+def remap(color: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Flip greys for the light theme and pick readable accents."""
+    if not LIGHT:
+        return color
+    if color in LIGHT_COLORS:
+        return LIGHT_COLORS[color]
+    if max(color) - min(color) <= 12:  # grey ramp, inverted and clamped
+        value = 255 - (sum(color) // 3)
+        value = max(40, min(230, value))
+        return (value, value, value)
+    return color
 
 NAMED = {
     30: (0, 0, 0), 31: (205, 49, 49), 32: (13, 188, 121), 33: (229, 229, 16),
@@ -66,7 +111,9 @@ def palette_256(index: int) -> tuple[int, int, int]:
 
 def parse_ansi(line: str) -> list[tuple[str, tuple[int, int, int], bool]]:
     runs: list[tuple[str, tuple[int, int, int], bool]] = []
-    color, bold = FOREGROUND, False
+    color = PALETTE["foreground"]
+    bold = False
+    is_default = True
     for chunk in re.split(r"(\x1b\[[0-9;]*m)", line):
         if not chunk:
             continue
@@ -76,29 +123,32 @@ def parse_ansi(line: str) -> list[tuple[str, tuple[int, int, int], bool]]:
             while i < len(codes):
                 code = codes[i]
                 if code == 0:
-                    color, bold = FOREGROUND, False
+                    color, bold, is_default = PALETTE["foreground"], False, True
                 elif code == 1:
                     bold = True
                 elif code in (21, 22):
                     bold = False
                 elif code == 39:
-                    color = FOREGROUND
+                    color, is_default = PALETTE["foreground"], True
                 elif code in NAMED:
-                    color = NAMED[code]
+                    color, is_default = NAMED[code], False
                 elif code == 38 and i + 1 < len(codes):
                     if codes[i + 1] == 2 and i + 4 < len(codes):
                         color = tuple(codes[i + 2:i + 5])
+                        is_default = False
                         i += 4
                     elif codes[i + 1] == 5 and i + 2 < len(codes):
                         color = palette_256(codes[i + 2])
+                        is_default = False
                         i += 2
                 i += 1
             continue
-        runs.append((chunk, color, bold))
+        runs.append((chunk, color if is_default else remap(color), bold))
     return runs
 
 
-def sample_pool(workdir: Path) -> Pool:
+def sample_pool(workdir: Path | str) -> Pool:
+    workdir = Path(workdir)
     now = time.time()
     base = workdir / "base"
     (base / "usage").mkdir(parents=True, exist_ok=True)
@@ -142,9 +192,10 @@ def sample_pool(workdir: Path) -> Pool:
     return pool
 
 
-def render_text(pool: Pool) -> str:
+def render_text(pool: Pool, theme_name: str) -> str:
     console = Console(width=WIDTH, record=True, force_terminal=True,
-                      color_system="truecolor", highlight=False, file=io.StringIO())
+                      color_system="truecolor", highlight=False,
+                      file=io.StringIO())
     console.print(build_renderable(pool, None, width=WIDTH))
     return console.export_text(styles=True)
 
@@ -163,7 +214,8 @@ def draw(text: str, out: Path) -> None:
 
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw_ctx = ImageDraw.Draw(image)
-    draw_ctx.rounded_rectangle([0, 0, width - 1, height - 1], RADIUS, fill=BACKGROUND)
+    draw_ctx.rounded_rectangle([0, 0, width - 1, height - 1], RADIUS,
+                               fill=PALETTE["background"])
 
     for row, line in enumerate(lines):
         x = PADDING
@@ -178,13 +230,22 @@ def draw(text: str, out: Path) -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--theme", choices=sorted(PALETTES), default="light")
+    parser.add_argument("--out", type=Path, default=ROOT / "docs" / "assets" / "dashboard.png")
+    args = parser.parse_args()
+
+    global PALETTE, LIGHT
+    PALETTE = PALETTES[args.theme]
+    LIGHT = args.theme == "light"
+
     if not FONT_PATH.is_file():
         print(f"font not found: {FONT_PATH}", file=sys.stderr)
         return 2
     with tempfile.TemporaryDirectory() as tmp:
-        pool = sample_pool(Path(tmp))
-        text = render_text(pool)
-    draw(text, ROOT / "docs" / "assets" / "dashboard.png")
+        pool = sample_pool(tmp)
+        text = render_text(pool, args.theme)
+    draw(text, args.out)
     return 0
 
 
