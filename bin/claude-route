@@ -1,0 +1,5 @@
+#!/bin/sh
+# Run claude-route straight from a checkout, no install required.
+set -e
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PYTHONPATH="$here/../src:$PYTHONPATH" exec "${PYTHON:-python3}" -m claude_route "$@"

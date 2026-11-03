@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "claude-route"
+version = "0.1.0"
+description = "Route one Claude Code install across several subscriptions, and watch every account's 5h / 7d quota without spending it."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Valdemar-Yu" }]
+keywords = ["claude-code", "claude", "quota", "usage", "tui", "deepseek"]
+classifiers = [
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: System :: Monitoring",
+]
+dependencies = ["rich>=13.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+claude-route = "claude_route.cli:main"
+claudepool = "claude_route.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Valdemar-Yu/claude-route"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/claude_route"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
