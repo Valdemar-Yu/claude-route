@@ -6,21 +6,9 @@
 
 一套 Claude Code，可以对接多个官方订阅轮换使用，也可以把请求转给 DeepSeek 之类的兼容后端；`claude-route` 负责其中的账号隔离、切换和额度可见性。
 
-```
-┌─ claude-route ──────────────────────────────────────────────────────────────────────────────────────┐
-│ 2026-11-02 23:23:26   2 accounts   live: claude-00                                                  │
-│                                                                                                     │
-│    #  account      5h window               resets    7d window            resets      data  state   │
-│   00  claude-00    ███████░░░░░░░  53%     2h56m     █░░░░░░░░░░░   8%    2d1h          0s  READY   │
-│   01  claude-01    ░░░░░░░░░░░░░░   0% ~   reset     ████████░░░░  63%    1d23h     14m57s  READY   │
-│                                                                                                     │
-│ 5h history, last hour                                                                               │
-│ 00  ▄    --                                                                                         │
-│ 01  ██████▁    --                                                                                   │
-│                                                                                                     │
-│ pick  claude-01      next probe  claude-00 in 9m59s      q quit · r probe · p pause · o offline      │
-└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
-```
+![claude-route dashboard](docs/assets/dashboard.png)
+
+<sub>截图由 `tools/make_screenshot.py` 从当前代码生成，数据是脚本里造的样例，不含真实账号信息。</sub>
 
 ## 它解决什么
 

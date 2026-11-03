@@ -6,6 +6,8 @@ import time
 from datetime import datetime
 
 from .core import (
+    BAR_EMPTY,
+    BAR_FULL,
     HARD_STALE,
     LIVE_WINDOW,
     Account,
@@ -15,6 +17,17 @@ from .core import (
     severity,
     sparkline,
 )
+
+
+def _bar(pct: float | None, width: int, text):
+    """A bar whose empty cells stay grey, so a full bar reads as one colour."""
+    from rich.text import Text
+
+    value = 0.0 if pct is None else max(0.0, min(100.0, pct))
+    filled = int(round(value / 100.0 * width))
+    text.append(BAR_FULL * filled, style=severity(pct))
+    text.append(BAR_EMPTY * (width - filled), style="grey30")
+    return text
 
 def _account_line(pool: Pool, account: Account, now: float):
     """One text line per account for narrow terminals."""
@@ -33,8 +46,7 @@ def _account_line(pool: Pool, account: Account, now: float):
     head.append(f"  data {fmt_duration(account.age) if account.age != float('inf') else '--'}",
                 style="grey50")
 
-    five_line = Text("     5h ")
-    five_line.append(make_bar(five, 12), style=severity(five))
+    five_line = _bar(five, 12, Text("     5h "))
     five_line.append(" ")
     five_line.append("  --" if five is None else f"{five:3.0f}%", style=severity(five))
     if reset_five:
@@ -42,8 +54,7 @@ def _account_line(pool: Pool, account: Account, now: float):
     elif account.five.remaining(now) is not None:
         five_line.append(f"  reset {fmt_duration(account.five.remaining(now))}", style="grey62")
 
-    seven_line = Text("     7d ")
-    seven_line.append(make_bar(seven, 12), style=severity(seven))
+    seven_line = _bar(seven, 12, Text("     7d "))
     seven_line.append(" ")
     seven_line.append("  --" if seven is None else f"{seven:3.0f}%", style=severity(seven))
     if reset_seven:
@@ -116,8 +127,7 @@ def build_renderable(pool: Pool, prober: Prober | None, notice: str = "", width:
             seven, reset_seven = account.seven.effective(now)
             state = account.state(now)
 
-            five_cell = Text()
-            five_cell.append(make_bar(five), style=severity(five))
+            five_cell = _bar(five, 14, Text())
             five_cell.append(" ")
             five_cell.append("  --" if five is None else f"{five:3.0f}%", style=severity(five))
             if reset_five:
@@ -129,8 +139,7 @@ def build_renderable(pool: Pool, prober: Prober | None, notice: str = "", width:
             elif account.five.remaining(now) is not None:
                 five_reset = fmt_duration(account.five.remaining(now))
 
-            seven_cell = Text()
-            seven_cell.append(make_bar(seven, 12), style=severity(seven))
+            seven_cell = _bar(seven, 12, Text())
             seven_cell.append(" ")
             seven_cell.append("  --" if seven is None else f"{seven:3.0f}%", style=severity(seven))
             if reset_seven:
