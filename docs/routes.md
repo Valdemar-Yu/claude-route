@@ -4,32 +4,43 @@
 
 ## 1. 官方订阅池
 
-claude-accounts 把每个订阅拆成三样东西：一份 config 目录、一个 OAuth token、一个 slug。启动某个账号时只需要两个环境变量：
+claude-accounts 把每个订阅拆成三样东西：一份 config 目录、一个 OAuth token、一个 slug（命令后缀）。启动某个账号时只需要两个环境变量：
 
+```bash
+export CLAUDE_CONFIG_DIR=<configs>/<slug>
+export CLAUDE_CODE_OAUTH_TOKEN=<该账号的 token>
 ```
-CLAUDE_CONFIG_DIR=<configs>/<slug>
-CLAUDE_CODE_OAUTH_TOKEN=<该账号的 token>
-```
+
+token 的位置随平台不同：macOS 由 `claude-accounts add` 写进登录 Keychain（`claude-route` 用 `/usr/bin/security find-generic-password` 读），Windows 和 Linux 写在 claude-accounts 根目录的 `tokens.json`，键是账号的 service 名。
 
 上游命令：
 
-```powershell
-claude-accounts add                 # 跑一次 OAuth，新增一个订阅
+```bash
+claude-accounts add                 # 跑一次 OAuth，起名并填命令后缀，下面用 00 举例
 claude-accounts list                # 列出所有账号和用量
 claude-accounts launch 00           # 用 00 号启动 Claude Code
 claude-accounts doctor              # 检查 token、隔离和同账号冲突
 claude-accounts refresh 00          # 换掉 00 号的 token
 ```
 
-每次 `add` 之后会多出一个可执行入口 `claude-<slug>`，等价于 `launch <slug>`。
+`add` 时自己起名字和命令后缀；`claude-accounts` 二进制旁边会多一个 `claude-<后缀>` 启动器（指向主二进制的软链接），等价于 `launch <后缀>`。上游 README 的例子是 `claude-gmail`、`claude-naver`，本文用 `00` 当后缀举例。
 
-如果你要自己包一层启动脚本，核心就是上面两个变量，加一条：不要继承 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、`CLAUDE_CODE_USE_BEDROCK` 之类的变量，否则订阅会被 API key 顶掉。参考 [examples/claude-account.cmd](../examples/claude-account.cmd)。
+如果你要自己包一层启动脚本，核心就是上面两个变量，加一条：不要继承 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、`CLAUDE_CODE_USE_BEDROCK` 之类的变量，否则订阅会被 API key 顶掉。macOS/Linux 用 [examples/claude-account.sh](../examples/claude-account.sh)，Windows 用 [examples/claude-account.cmd](../examples/claude-account.cmd)；两个脚本都清掉同样的五个变量，再交给 `claude-accounts launch`。
 
 账号之间必须用不同的 `CLAUDE_CONFIG_DIR`。共用同一个目录会让两个订阅轮流覆盖 `~/.claude.json` 和凭据，表现是登录态莫名其妙丢失。
 
 ## 2. Claude Code + DeepSeek
 
-DeepSeek 提供 Anthropic 兼容端点，Claude Code 原样可用，只改两个变量：
+DeepSeek 提供 Anthropic 兼容端点，Claude Code 原样可用，只改两个变量。macOS/Linux 的 zsh/bash：
+
+```bash
+export CLAUDE_CONFIG_DIR="$HOME/.config/claude-route/deepseek"
+export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+export ANTHROPIC_API_KEY="sk-..."
+claude
+```
+
+Windows PowerShell：
 
 ```powershell
 $env:CLAUDE_CONFIG_DIR  = "$HOME\.config\claude-route\deepseek"
@@ -73,7 +84,7 @@ claude
 
 Baton 的模型是 conductor 决策、monitor 监督、executor 执行。接入 claude-route 只需要一步：给每个 executor 分配不同的 `CLAUDE_CONFIG_DIR`，然后用看板做调度输入。
 
-```powershell
+```bash
 claude-route --json
 ```
 

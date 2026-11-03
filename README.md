@@ -6,6 +6,8 @@
 
 一套 Claude Code，可以对接多个官方订阅轮换使用，也可以把请求转给 DeepSeek 之类的兼容后端；`claude-route` 负责其中的账号隔离、切换和额度可见性。
 
+macOS 是主要开发和验证平台，Windows、Linux 同样支持。下文默认 macOS 的 zsh/bash，Windows 的写法放在每节后面的补充里。
+
 ![claude-route dashboard](docs/assets/dashboard.png)
 
 <sub>截图由 `tools/make_screenshot.py` 从当前代码生成，数据是脚本里造的样例，不含真实账号信息。</sub>
@@ -30,19 +32,19 @@
 | Claude Code + DeepSeek | Claude Code | `api.deepseek.com/anthropic` | 批量、长尾、机械活，按 token 付费，不占订阅额度 |
 | Hermes + Codex | Hermes / Codex CLI | 另一套 agent 运行时 | 想换执行者或跨模型交叉验证时 |
 
-DeepSeek 官方提供 Anthropic 兼容端点，`claude-opus*` 映射到 `deepseek-v4-pro`，`claude-sonnet*` / `claude-haiku*` 映射到 `deepseek-flash`，所以 Claude Code 只改两个环境变量就能切过去：
-
-```powershell
-$env:ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
-$env:ANTHROPIC_API_KEY  = "sk-..."
-claude
-```
-
-zsh/bash：
+DeepSeek 官方提供 Anthropic 兼容端点，`claude-opus*` 映射到 `deepseek-v4-pro`，`claude-sonnet*` / `claude-haiku*` 映射到 `deepseek-flash`，所以 Claude Code 只改两个环境变量就能切过去。macOS/Linux 的 zsh/bash：
 
 ```bash
 export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
 export ANTHROPIC_API_KEY="sk-..."
+claude
+```
+
+Windows PowerShell：
+
+```powershell
+$env:ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
+$env:ANTHROPIC_API_KEY  = "sk-..."
 claude
 ```
 
@@ -52,11 +54,97 @@ claude
 
 如果一次要做的是十几个文件、几十轮的工具调用，单会话会顶到 5 小时额度。可行的做法是在外面套一层编排，把任务拆给多个执行者，每个执行者跑在独立的订阅上，`claude-route` 负责盯着它们别把池子抽干。
 
-Baton 就是作者在用的那层编排：conductor 决策、monitor 监督、executor 执行，执行者按任务分发到不同后端。`claude-route` 不依赖它，也不包含它；这里只说明接入点——把每个 executor 的 `CLAUDE_CONFIG_DIR` 指向 claude-accounts 里不同的账号目录，再把 `claude-route --json` 接进编排器的调度判断，就能按额度余量分配任务。
+Baton 就是作者在用的那层编排：conductor 决策、monitor 监督、executor 执行，执行者按任务分发到不同后端。`claude-route` 不依赖它，也不包含它；这里只说明接入点：把每个 executor 的 `CLAUDE_CONFIG_DIR` 指向 claude-accounts 里不同的账号目录，再把 `claude-route --json` 接进编排器的调度判断，就能按额度余量分配任务。
 
 ## 安装
 
-要求 Python 3.10+ 和 [claude-accounts](https://github.com/claude-code-tools/claude-code-account-switcher)。后者是 Go 程序，按上游 README 装好，确认 `claude-accounts list` 能列出账号。
+要求 Python 3.10+ 和上游 [claude-accounts](https://github.com/claude-code-tools/claude-code-account-switcher)。下面按 macOS 的顺序写，Windows 的等价写法在本节最后。
+
+### 1. 安装 claude-accounts
+
+claude-accounts 是 Go 程序。macOS 上用上游的安装脚本，它会按 OS 和架构下载预编译二进制，装进 PATH 上的可写目录（默认 `~/.local/bin`），不改 `.zshrc` / `.bashrc`。当前版本是 `v1.0.0`，更新的版本去 [release 页](https://github.com/claude-code-tools/claude-code-account-switcher/releases) 看，把命令里的版本号换掉：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/claude-code-tools/claude-code-account-switcher/v1.0.0/install.sh | sh
+claude-accounts list
+```
+
+`~/.local/bin` 要在 PATH 上（脚本不会改 shell 配置）。macOS 默认的 zsh 不带这个目录，在 `~/.zshrc` 里加一行，然后开新终端：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+`claude-accounts list` 能跑起来就算装好了，还没有账号时是空列表。
+
+要装到别的目录，在 `sh` 前面设 `CLAUDE_ACCOUNTS_BIN_DIR`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/claude-code-tools/claude-code-account-switcher/v1.0.0/install.sh | CLAUDE_ACCOUNTS_BIN_DIR="$HOME/bin" sh
+```
+
+不想用安装脚本，也可以手动下 release 包。Apple Silicon 用 `darwin_arm64`，Intel 用 `darwin_amd64`，包里顶层就是一个 `claude-accounts` 文件：
+
+```bash
+VERSION=v1.0.0
+ARCH=darwin_arm64        # Intel 用 darwin_amd64
+mkdir -p ~/.local/bin /tmp/claude-accounts-dl
+curl -fL -o /tmp/claude-accounts.tar.gz \
+  "https://github.com/claude-code-tools/claude-code-account-switcher/releases/download/$VERSION/claude-accounts_${VERSION}_${ARCH}.tar.gz"
+tar xzf /tmp/claude-accounts.tar.gz -C /tmp/claude-accounts-dl
+install -m 755 /tmp/claude-accounts-dl/claude-accounts ~/.local/bin/claude-accounts
+claude-accounts list
+```
+
+### 2. 安装 claude-route
+
+Xcode Command Line Tools 自带的 `python3` 可能是 3.9，低于项目要求的 3.10，直接 `python -m pip install -e .` 可能卡在版本检查上。推荐用 uv 装到独立的工具环境：
+
+```bash
+git clone https://github.com/Valdemar-Yu/claude-route.git
+cd claude-route
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install -e .
+```
+
+`uv tool install` 会把 `claude-route` 和 `claudepool` 两个等价命令装进 `~/.local/bin`，和上一步在同一个 PATH 上。
+
+不想用 uv 的话，用 3.10+ 的解释器建 venv，`python3.12` 换成你机器上装好的版本：
+
+```bash
+python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+```
+
+### 3. 添加账号
+
+`claude-accounts add` 会让你给账号起名字和命令后缀，后缀用来自定义启动命令。上游的例子是 `claude-gmail`、`claude-naver`；下面用 `00`、`01` 当后缀，填什么由你定：
+
+```bash
+claude-accounts add        # 跑一遍 claude setup-token，走浏览器授权，后缀填 00
+claude-accounts add        # 再加一个，后缀填 01
+claude-accounts list
+```
+
+`add` 会调用 `claude setup-token`，拿到的 token 存进登录 Keychain。每加一个账号，`claude-accounts` 二进制旁边会多一个 `claude-<后缀>` 启动器（指向主二进制的软链接）。启动会话：
+
+```bash
+claude-00                  # 等价于 claude-accounts launch 00
+claude-01
+```
+
+只有经 `claude-accounts launch <slug>` 或 `claude-<slug>` 启动的会话才会自动挂上 statusline（`--settings <root>/usage-settings.json`），这里的 slug 就是 `add` 时填的后缀；会话运行期间，每次 statusline 刷新都会写一次 `<root>/usage/<slug>.json`。在别处直接敲 `claude` 不会更新这个文件，看板上的数字就停在旧值。
+
+开一个会话之后，在另一个终端里跑看板：
+
+```bash
+claude-route
+```
+
+### Windows
+
+Windows 上装 claude-route 用 pip，Python 同样要 3.10+：
 
 ```powershell
 git clone https://github.com/Valdemar-Yu/claude-route.git
@@ -64,28 +152,17 @@ cd claude-route
 python -m pip install -e .
 ```
 
-macOS 的系统 `python3` 可能仍是 3.9，低于本项目要求的 3.10。推荐先用
-[`uv`](https://docs.astral.sh/uv/) 安装到工具环境，或创建一个 3.10+ 的虚拟环境：
-
-```bash
-uv tool install -e .
-# 或：uv venv --python 3.12 && . .venv/bin/activate && python -m pip install -e .
-```
-
-macOS 上的 `claude-accounts` 请使用上游发布的官方 `darwin` 安装包；它会把账号
-token 放进登录 Keychain，`claude-route` 只读这些条目。
-
-装完得到两个等价命令：`claude-route` 和 `claudepool`。
-
 不装也能跑，仓库里带了免安装入口：
 
 ```powershell
 .\bin\claude-route.cmd --once
 ```
 
+claude-accounts 在 Windows 上按上游 README 安装，确认 `claude-accounts list` 可用即可。Windows 和 Linux 的 token 存在 claude-accounts 根目录的 `tokens.json`，macOS 存在登录 Keychain，`claude-route` 两种都只读。
+
 ## 使用
 
-```powershell
+```bash
 claude-route                # 进入 TUI，1 秒刷新
 claude-route --once         # 打印一屏快照
 claude-route --json         # 机器可读，给编排器或状态栏用
@@ -102,8 +179,8 @@ claude-route --probe --once # 立刻探一次官方接口（受冷却限制）
 
 | 参数 | 说明 |
 |---|---|
-| `--base` | claude-accounts 的数据目录；优先使用 `CLAUDE_SUBSCRIPTIONS_DIR`，否则是 `${XDG_CONFIG_HOME:-~/.config}/claude-subscriptions` |
-| `--state-dir` | 探测状态和历史的位置；Windows 默认 `%LOCALAPPDATA%\claude-route`，macOS/Linux 默认 `${XDG_STATE_HOME:-~/.local/state}/claude-route`。若新目录不存在而旧的 `claude-pool-monitor` 存在，会继续使用旧目录 |
+| `--base` | claude-accounts 的数据目录；优先使用 `CLAUDE_SUBSCRIPTIONS_DIR`，否则是 `${XDG_CONFIG_HOME:-~/.config}/claude-subscriptions`。Windows 上同样先看 `CLAUDE_SUBSCRIPTIONS_DIR` 和 `XDG_CONFIG_HOME`，都没有则是 `%USERPROFILE%\.config\claude-subscriptions` |
+| `--state-dir` | 探测状态和历史的位置；macOS/Linux 默认 `${XDG_STATE_HOME:-~/.local/state}/claude-route`，Windows 默认 `%LOCALAPPDATA%\claude-route`。若新目录不存在而旧的 `claude-pool-monitor` 存在，会继续使用旧目录 |
 | `--interval` | 重绘间隔，默认 1 秒 |
 
 ## 读数说明
@@ -134,11 +211,11 @@ Claude Code 会话
 
 ## 边界
 
-- 只读。claude-route 不写 `tokens.json`、`accounts.tsv`、`usage/` 或 `configs/`，探测结果存在自己的状态目录。
+- 只读。claude-route 不写 claude-accounts 的 `accounts.tsv`、`tokens.json`、`usage/` 或 `configs/`，也不写 Keychain，探测结果存在自己的状态目录。
+- macOS 上 token 从登录 Keychain 读，走 `/usr/bin/security find-generic-password -a $USER -s <service> -w`；Windows 和 Linux 读 claude-accounts 根目录的 `tokens.json`。两条路径都只读。
 - 没有活会话的账号，数字会停在最后一次缓存上；`data` 列变红就是在提示这件事。
 - 429 是账号或出口 IP 级别的，两个账号曾经同时被限。探测预算是全局算的，不是每个账号各算一份。
-- macOS 上会从 claude-accounts 的登录 Keychain 读取 token；整个工具保持只读，不写账号文件、usage 缓存或 Keychain。
-- Windows、macOS 和 Linux 都支持 TUI 交互键；没有终端（例如管道或重定向）时会退化为不读键。
+- macOS、Linux 和 Windows 都支持 TUI 交互键；没有终端（例如管道或重定向）时不读键。
 - 上游 claude-accounts 的二进制不在此仓库内，本仓库不打包、不修改它。
 
 ## License
@@ -149,6 +226,6 @@ MIT。上游 claude-accounts 遵循其各自的许可。
 
 **English**
 
-`claude-route` is a small companion for [claude-accounts](https://github.com/claude-code-tools/claude-code-account-switcher): a 1 Hz terminal dashboard for every subscription's 5h / 7d quota that never spends any of it. It reads the usage cache claude-accounts already writes from Claude Code's statusline, and only falls back to the official usage endpoint once every 45 minutes per account — honouring `Retry-After`. It also documents routing the same Claude Code install to DeepSeek's Anthropic-compatible endpoint, and to Hermes / Codex, for work that should not touch subscription quota at all.
+`claude-route` is a small companion for [claude-accounts](https://github.com/claude-code-tools/claude-code-account-switcher): a 1 Hz terminal dashboard for every subscription's 5h / 7d quota that never spends any of it. It reads the usage cache claude-accounts already writes from Claude Code's statusline, and only falls back to the official usage endpoint once every 45 minutes per account, honouring `Retry-After`. It also documents routing the same Claude Code install to DeepSeek's Anthropic-compatible endpoint, and to Hermes / Codex, for work that should not touch subscription quota at all.
 
-On macOS it reads each account token from the login Keychain and keeps the same read-only boundary. The POSIX TUI accepts interactive keys when stdin is a terminal and leaves redirected or piped stdin untouched.
+macOS is the primary platform; Windows and Linux are supported the same way. Install claude-accounts with the upstream `install.sh`, which downloads the prebuilt binary for your OS and architecture, then `uv tool install -e .` for claude-route. On macOS the account tokens live in the login Keychain and are only read; on Windows and Linux they are in `tokens.json` under the claude-accounts root. The TUI accepts interactive keys on all three platforms and leaves piped or redirected stdin untouched.
