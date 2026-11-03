@@ -3,15 +3,87 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
+import select
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
-from .core import History, Pool, Store, configure_glyphs, enable_utf8_console
+from .core import (
+    History,
+    Pool,
+    Prober,
+    Store,
+    configure_glyphs,
+    enable_utf8_console,
+)
 from .render import build_renderable
+
+
+_posix_keyboard_fd: int | None = None
+_posix_keyboard_attrs = None
+_posix_escape_state = 0
+
+
+def _stdin_tty_fd() -> int | None:
+    """Return stdin's descriptor when it is a usable terminal."""
+    try:
+        fd = sys.stdin.fileno()
+        return fd if os.isatty(fd) else None
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def start_keyboard() -> bool:
+    """Put POSIX stdin in cbreak mode for the interactive dashboard."""
+    global _posix_keyboard_fd, _posix_keyboard_attrs
+    if os.name == "nt":
+        return False
+    if _posix_keyboard_fd is not None:
+        return True
+    fd = _stdin_tty_fd()
+    if fd is None:
+        return False
+    try:
+        import termios
+        import tty
+    except ImportError:
+        return False
+    try:
+        attrs = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+    except (OSError, ValueError, termios.error):
+        return False
+    _posix_keyboard_fd = fd
+    _posix_keyboard_attrs = attrs
+    atexit.register(restore_keyboard)
+    return True
+
+
+def restore_keyboard() -> None:
+    """Restore POSIX stdin after the dashboard exits."""
+    global _posix_keyboard_fd, _posix_keyboard_attrs, _posix_escape_state
+    fd, attrs = _posix_keyboard_fd, _posix_keyboard_attrs
+    _posix_keyboard_fd = None
+    _posix_keyboard_attrs = None
+    _posix_escape_state = 0
+    if fd is None or attrs is None:
+        return
+    try:
+        import termios
+    except ImportError:
+        return
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
+    except (OSError, ValueError, termios.error):
+        pass
+    try:
+        atexit.unregister(restore_keyboard)
+    except (AttributeError, ValueError):
+        pass
 
 def print_snapshot(pool: Pool, as_json: bool, width: int = 0) -> None:
     from rich.console import Console
@@ -49,34 +121,88 @@ def print_snapshot(pool: Pool, as_json: bool, width: int = 0) -> None:
     console.print(build_renderable(pool, None, width=width or console.width))
 
 def read_keys() -> list[str]:
-    if os.name != "nt":
-        return []
-    try:
-        import msvcrt
-    except ImportError:
-        return []
-    keys = []
-    while msvcrt.kbhit():
+    global _posix_escape_state
+    if os.name == "nt":
         try:
-            keys.append(msvcrt.getwch())
-        except OSError:
-            break
+            import msvcrt
+        except ImportError:
+            return []
+        keys = []
+        while msvcrt.kbhit():
+            try:
+                keys.append(msvcrt.getwch())
+            except OSError:
+                break
+        return keys
+
+    if _posix_keyboard_fd is None and not start_keyboard():
+        return []
+    fd = _posix_keyboard_fd
+    if fd is None:
+        return []
+
+    data = bytearray()
+    try:
+        while True:
+            ready, _, _ = select.select([fd], [], [], 0)
+            if not ready:
+                break
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(chunk) < 4096:
+                break
+    except (OSError, ValueError):
+        return []
+
+    keys: list[str] = []
+    for byte in data:
+        if _posix_escape_state == 1:
+            # ESC [ / ESC O introduce CSI/function-key sequences.  Discard
+            # the whole sequence so arrows cannot turn into command keys.
+            if byte in (ord("["), ord("O")):
+                _posix_escape_state = 2
+            elif byte == 0x1B:
+                _posix_escape_state = 1
+            else:
+                _posix_escape_state = 0
+            continue
+        if _posix_escape_state == 2:
+            if 0x40 <= byte <= 0x7E:
+                _posix_escape_state = 0
+            continue
+        if byte == 0x1B:
+            _posix_escape_state = 1
+        elif byte == 0x03:
+            keys.append("\x03")
+        elif 0x20 <= byte <= 0x7E or byte in (0x09, 0x0A, 0x0D):
+            keys.append(chr(byte))
     return keys
 
 
 
 def default_base() -> Path:
-    for env in ("CLAUDE_SUBSCRIPTIONS_CONFIG_DIR", "CLAUDE_SUBSCRIPTIONS_DIR"):
-        value = os.environ.get(env)
-        if value:
-            return Path(value).expanduser()
-    return Path.home() / ".config" / "claude-subscriptions"
+    value = os.environ.get("CLAUDE_SUBSCRIPTIONS_DIR")
+    if value:
+        return Path(value).expanduser()
+    config_root = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(config_root).expanduser() if config_root else Path.home() / ".config"
+    return base / "claude-subscriptions"
 
 
 def default_state() -> Path:
-    root = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_STATE_HOME")
-    base = Path(root).expanduser() if root else Path.home() / ".local" / "state"
-    return base / "claude-pool-monitor"
+    if sys.platform == "win32":
+        root = os.environ.get("LOCALAPPDATA")
+        base = Path(root).expanduser() if root else Path.home() / "AppData" / "Local"
+    else:
+        root = os.environ.get("XDG_STATE_HOME")
+        base = Path(root).expanduser() if root else Path.home() / ".local" / "state"
+    current = base / "claude-route"
+    legacy = base / "claude-pool-monitor"
+    if not current.exists() and legacy.exists():
+        return legacy
+    return current
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -141,13 +267,14 @@ def main(argv: list[str] | None = None) -> int:
 
     console = Console()
     prober = None if args.offline else Prober(pool)
-    if prober:
-        prober.start()
+    keyboard_started = start_keyboard()
 
     notice = ""
     paused = False
     frames = 0
     try:
+        if prober:
+            prober.start()
         with Live(build_renderable(pool, prober, width=args.width or console.width),
                   console=console, refresh_per_second=4, screen=True) as live:
             while True:
@@ -184,4 +311,6 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if prober:
             prober.stop_event.set()
+        if keyboard_started:
+            restore_keyboard()
     return 0

@@ -38,6 +38,14 @@ $env:ANTHROPIC_API_KEY  = "sk-..."
 claude
 ```
 
+zsh/bash：
+
+```bash
+export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+export ANTHROPIC_API_KEY="sk-..."
+claude
+```
+
 细节和另外两条路由的配法见 [docs/routes.md](docs/routes.md)。
 
 ## 可选：Baton 编排
@@ -55,6 +63,17 @@ git clone https://github.com/Valdemar-Yu/claude-route.git
 cd claude-route
 python -m pip install -e .
 ```
+
+macOS 的系统 `python3` 可能仍是 3.9，低于本项目要求的 3.10。推荐先用
+[`uv`](https://docs.astral.sh/uv/) 安装到工具环境，或创建一个 3.10+ 的虚拟环境：
+
+```bash
+uv tool install -e .
+# 或：uv venv --python 3.12 && . .venv/bin/activate && python -m pip install -e .
+```
+
+macOS 上的 `claude-accounts` 请使用上游发布的官方 `darwin` 安装包；它会把账号
+token 放进登录 Keychain，`claude-route` 只读这些条目。
 
 装完得到两个等价命令：`claude-route` 和 `claudepool`。
 
@@ -83,8 +102,8 @@ claude-route --probe --once # 立刻探一次官方接口（受冷却限制）
 
 | 参数 | 说明 |
 |---|---|
-| `--base` | claude-accounts 的数据目录，默认 `~/.config/claude-subscriptions`，也认 `CLAUDE_SUBSCRIPTIONS_CONFIG_DIR` |
-| `--state-dir` | 探测状态和历史的位置，默认 `%LOCALAPPDATA%\claude-route`（Linux 为 `~/.local/state/claude-route`） |
+| `--base` | claude-accounts 的数据目录；优先使用 `CLAUDE_SUBSCRIPTIONS_DIR`，否则是 `${XDG_CONFIG_HOME:-~/.config}/claude-subscriptions` |
+| `--state-dir` | 探测状态和历史的位置；Windows 默认 `%LOCALAPPDATA%\claude-route`，macOS/Linux 默认 `${XDG_STATE_HOME:-~/.local/state}/claude-route`。若新目录不存在而旧的 `claude-pool-monitor` 存在，会继续使用旧目录 |
 | `--interval` | 重绘间隔，默认 1 秒 |
 
 ## 读数说明
@@ -118,7 +137,8 @@ Claude Code 会话
 - 只读。claude-route 不写 `tokens.json`、`accounts.tsv`、`usage/` 或 `configs/`，探测结果存在自己的状态目录。
 - 没有活会话的账号，数字会停在最后一次缓存上；`data` 列变红就是在提示这件事。
 - 429 是账号或出口 IP 级别的，两个账号曾经同时被限。探测预算是全局算的，不是每个账号各算一份。
-- Windows 优先（码页、PATH、`msvcrt` 键盘），Linux/macOS 能跑但没做交互键适配。
+- macOS 上会从 claude-accounts 的登录 Keychain 读取 token；整个工具保持只读，不写账号文件、usage 缓存或 Keychain。
+- Windows、macOS 和 Linux 都支持 TUI 交互键；没有终端（例如管道或重定向）时会退化为不读键。
 - 上游 claude-accounts 的二进制不在此仓库内，本仓库不打包、不修改它。
 
 ## License
@@ -130,3 +150,5 @@ MIT。上游 claude-accounts 遵循其各自的许可。
 **English**
 
 `claude-route` is a small companion for [claude-accounts](https://github.com/claude-code-tools/claude-code-account-switcher): a 1 Hz terminal dashboard for every subscription's 5h / 7d quota that never spends any of it. It reads the usage cache claude-accounts already writes from Claude Code's statusline, and only falls back to the official usage endpoint once every 45 minutes per account — honouring `Retry-After`. It also documents routing the same Claude Code install to DeepSeek's Anthropic-compatible endpoint, and to Hermes / Codex, for work that should not touch subscription quota at all.
+
+On macOS it reads each account token from the login Keychain and keeps the same read-only boundary. The POSIX TUI accepts interactive keys when stdin is a terminal and leaves redirected or piped stdin untouched.

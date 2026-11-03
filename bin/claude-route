@@ -2,4 +2,16 @@
 # Run claude-route straight from a checkout, no install required.
 set -e
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-PYTHONPATH="$here/../src:$PYTHONPATH" exec "${PYTHON:-python3}" -m claude_route "$@"
+python_bin=${PYTHON:-python3}
+if python_version=$("$python_bin" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}"); raise SystemExit(0 if sys.version_info >= (3, 10) else 2)' 2>/dev/null); then
+    :
+else
+    status=$?
+    if [ "$status" -eq 2 ]; then
+        echo "claude-route requires Python 3.10 or newer (found Python $python_version via $python_bin)" >&2
+    else
+        echo "claude-route could not run Python via $python_bin" >&2
+    fi
+    exit 1
+fi
+PYTHONPATH="$here/../src:$PYTHONPATH" exec "$python_bin" -m claude_route "$@"

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -27,6 +28,7 @@ from pathlib import Path
 
 USAGE_API = "https://api.anthropic.com/api/oauth/usage"
 ANTHROPIC_BETA = "oauth-2025-04-20"
+SERVICE_PREFIX = "Claude Code Subscription: "
 
 PROBE_INTERVAL = 45 * 60      # per account, seconds
 PROBE_GAP = 90                # minimum gap between two probes, seconds
@@ -193,11 +195,35 @@ def windows_from(payload: dict | None, source: str, at: float) -> dict[str, Wind
     return out
 
 
+def keychain_token(service: str) -> str:
+    """Read a claude-accounts token from the macOS login Keychain.
+
+    Upstream stores one generic-password item per account on darwin, so there
+    is no tokens.json to read there. Returns "" when the platform is not macOS,
+    the item is missing (security exits 44), or the query fails.
+    """
+    if sys.platform != "darwin" or not service:
+        return ""
+    user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+    try:
+        result = subprocess.run(
+            ["/usr/bin/security", "find-generic-password",
+             "-a", user, "-s", service, "-w"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
 @dataclass
 class Account:
     slug: str
     name: str
     label: str
+    service: str = ""
     five: Window = field(default_factory=Window)
     seven: Window = field(default_factory=Window)
     age: float = float("inf")
@@ -231,31 +257,46 @@ class Store:
     """Read-only view of claude-accounts' on-disk layout."""
 
     def __init__(self, base: Path):
-        self.base = base
-        self.usage_dir = base / "usage"
+        self.base = Path(base)
+        accounts_file = os.environ.get("CLAUDE_SUBSCRIPTIONS_FILE")
+        usage_dir = os.environ.get("CLAUDE_SUBSCRIPTIONS_USAGE_DIR")
+        self.accounts_file = (Path(accounts_file).expanduser()
+                              if accounts_file else self.base / "accounts.tsv")
+        self.usage_dir = (Path(usage_dir).expanduser()
+                          if usage_dir else self.base / "usage")
 
     def load_accounts(self) -> list[Account]:
-        rows: list[tuple[str, str]] = []
-        tsv = self.base / "accounts.tsv"
+        rows: list[tuple[str, str, str]] = []
+        tsv = self.accounts_file
         if tsv.is_file():
             for line in tsv.read_text("utf-8", errors="replace").splitlines():
                 if not line.strip() or line.lstrip().startswith("#"):
                     continue
-                parts = line.split("\t")
-                slug = parts[0].strip()
+                parts = [part.strip() for part in line.split("\t")]
+                slug = parts[0] if parts else ""
                 if not slug:
                     continue
-                label = parts[2].strip() if len(parts) > 2 and parts[2].strip() else ""
-                rows.append((slug, label))
+                # claude-accounts writes slug<TAB>label<TAB>keychain-service.
+                # Older layouts put the label in the third column instead, so
+                # only treat column 3 as a service when it looks like one.
+                label, service = "", ""
+                if len(parts) > 2 and parts[2].startswith(SERVICE_PREFIX):
+                    label, service = parts[1], parts[2]
+                elif len(parts) > 2:
+                    label = parts[2]
+                elif len(parts) > 1:
+                    label = parts[1]
+                rows.append((slug, label, service))
         if not rows:  # fall back to the token store
             payload, _ = read_json(self.base / "tokens.json")
             for key in (payload or {}):
                 slug = key.rsplit("claude-", 1)[-1].strip()
                 if slug:
-                    rows.append((slug, key))
+                    rows.append((slug, key, key))
         accounts = [
-            Account(slug=slug, name=f"claude-{slug}", label=label or f"claude-{slug}")
-            for slug, label in rows
+            Account(slug=slug, name=f"claude-{slug}", label=label or f"claude-{slug}",
+                    service=service)
+            for slug, label, service in rows
         ]
         accounts.sort(key=lambda acc: acc.slug)
         return accounts
@@ -266,11 +307,16 @@ class Store:
     def token_for(self, account: Account) -> str:
         if account.token:
             return account.token
+        service = account.service or f"{SERVICE_PREFIX}claude-{account.slug}"
+        token = keychain_token(service)
+        if token:
+            account.token = token
+            return token
         payload, _ = read_json(self.base / "tokens.json")
         if not isinstance(payload, dict):
             return ""
-        for key in (account.label, f"Claude Code Subscription: {account.name}",
-                    f"Claude Code Subscription: claude-{account.slug}"):
+        for key in (account.label, service,
+                    f"{SERVICE_PREFIX}claude-{account.slug}"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 account.token = value.strip()

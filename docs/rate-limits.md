@@ -43,6 +43,6 @@ usage/<slug>.json 存在且新鲜？
 
 ## 手动重置
 
-探测状态存在 `%LOCALAPPDATA%\claude-route\probe_state.json`（Linux 为 `~/.local/state/claude-route/`）。删掉这个文件等于清空所有冷却记录，下一轮就会重新探测——在明明还被限流的时候这么做只会再吃一次 429，没有别的效果。
+探测状态存在 Windows 的 `%LOCALAPPDATA%\claude-route\probe_state.json`，或 macOS/Linux 的 `${XDG_STATE_HOME:-~/.local/state}/claude-route/probe_state.json`。如果新目录不存在而旧的 `claude-pool-monitor` 目录存在，程序会继续使用旧目录。删掉这个文件等于清空所有冷却记录，下一轮就会重新探测——在明明还被限流的时候这么做只会再吃一次 429，没有别的效果。
 
 想彻底不发请求，用 `--offline`。
