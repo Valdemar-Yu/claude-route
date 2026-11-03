@@ -127,7 +127,16 @@ claude-accounts add        # 再加一个，后缀填 01
 claude-accounts list
 ```
 
-`add` 会调用 `claude setup-token`，拿到的 token 存进登录 Keychain。每加一个账号，`claude-accounts` 二进制旁边会多一个 `claude-<后缀>` 启动器（指向主二进制的软链接）。启动会话：
+`add` 会调用 `claude setup-token`，拿到的 token 存进登录 Keychain。
+
+`claude-<后缀>` 启动器是指向 `claude-accounts` 的软链接，放在它旁边，但 `claude-accounts add` 子命令不会创建它们，只有不带参数运行 `claude-accounts`（交互式管理器）时才会补齐。所以加完账号后运行一次，看到账号列表就退出（数字菜单输入 `0`，装了 fzf 时按 Esc）：
+
+```bash
+claude-accounts            # 进入管理器即会创建 claude-00、claude-01，然后退出
+rehash                     # zsh 刷新命令缓存，或者开新终端
+```
+
+启动会话：
 
 ```bash
 claude-00                  # 等价于 claude-accounts launch 00
