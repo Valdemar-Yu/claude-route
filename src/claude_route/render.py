@@ -191,5 +191,5 @@ def build_renderable(pool: Pool, prober: Prober | None, notice: str = "", width:
         footer.append("  ".join(prober.events), style="grey50")
 
     return Panel(Group(header, Text(""), *body, Text(""), hist_table, Text(""), footer),
-                 border_style="grey35", title="claude-pool-monitor",
+                 border_style="grey35", title="claude-route",
                  title_align="left")
