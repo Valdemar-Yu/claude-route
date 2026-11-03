@@ -34,6 +34,7 @@ PROBE_INTERVAL = 45 * 60      # per account, seconds
 PROBE_GAP = 90                # minimum gap between two probes, seconds
 PROBE_STALE = 10 * 60         # cache older than this may be refreshed
 PROBE_STALE_RESET = 2 * 60    # after a reset, refresh sooner than that
+SCOPE_BACKOFF = 24 * 60 * 60  # token lacks user:profile; re-check once a day
 HARD_STALE = 60 * 60          # display turns red
 LIVE_WINDOW = 90              # cache age that proves a session is running
 HISTORY_WINDOW = 60 * 60      # curve / burn-rate lookback
@@ -170,6 +171,15 @@ class Window:
         if self.resets_at is None:
             return None
         return self.resets_at.timestamp() - now
+
+
+def _is_scope_error(exc: urllib.error.HTTPError) -> bool:
+    """Whether a 401/403 from the usage endpoint means 'token scope too narrow'."""
+    try:
+        body = exc.read().decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - an unreadable body is just not a scope error
+        return False
+    return "oauth_scope_insufficient" in body or "user:profile" in body
 
 
 def windows_from(payload: dict | None, source: str, at: float) -> dict[str, Window]:
@@ -438,6 +448,11 @@ class Pool:
         self.next_allowed: dict[str, float] = {}
         self.last_global_probe = 0.0
         self.last_error: dict[str, str] = {}
+        # Accounts whose token the usage endpoint refuses for missing
+        # user:profile scope. `claude setup-token` tokens (what claude-accounts
+        # stores) only carry inference scope, so for them the statusline cache
+        # is the only data source.
+        self.scope_denied: set[str] = set()
         self._load_state()
 
     # -- state ------------------------------------------------------------- #
@@ -455,12 +470,16 @@ class Pool:
         last = payload.get("last_global_probe")
         if isinstance(last, (int, float)):
             self.last_global_probe = float(last)
+        denied = payload.get("scope_denied")
+        if isinstance(denied, list):
+            self.scope_denied = {str(slug) for slug in denied}
 
     def _save_state(self) -> None:
         try:
             self.state_dir.mkdir(parents=True, exist_ok=True)
             payload = {"next_allowed": self.next_allowed,
-                       "last_global_probe": self.last_global_probe}
+                       "last_global_probe": self.last_global_probe,
+                       "scope_denied": sorted(self.scope_denied)}
             self._state_file().write_text(json.dumps(payload), "utf-8")
         except OSError:
             pass
@@ -505,7 +524,7 @@ class Pool:
         return bool(self.store.token_for(account))
 
     def probe(self, account: Account) -> str:
-        """One GET against the usage endpoint. Returns 'ok' / '429' / 'error'."""
+        """One GET against the usage endpoint. Returns 'ok' / '429' / 'scope' / 'error'."""
         token = self.store.token_for(account)
         if not token:
             return "error"
@@ -530,6 +549,13 @@ class Pool:
             with opener.open(request, timeout=20) as response:
                 payload = json.loads(response.read().decode("utf-8", "replace"))
         except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403) and _is_scope_error(exc):
+                with self.lock:
+                    self.scope_denied.add(account.slug)
+                    self.next_allowed[account.slug] = now + SCOPE_BACKOFF
+                    self._save_state()
+                    self.last_error[account.slug] = "token lacks user:profile scope"
+                return "scope"
             headers = exc.headers or {}
             raw_retry = headers.get("Retry-After") if headers else None
             try:
@@ -556,6 +582,7 @@ class Pool:
                 self.last_error[account.slug] = "unexpected payload"
             return "error"
 
+        self.scope_denied.discard(account.slug)
         target = self.state_dir / "api" / f"{account.slug}.json"
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -574,6 +601,8 @@ class Pool:
             return None
         best: tuple[str, float] | None = None
         for account in self.accounts:
+            if account.slug in self.scope_denied:
+                continue
             budget = max(self.next_allowed.get(account.slug, 0.0),
                          self.last_global_probe + PROBE_GAP)
             _, resetted = account.five.effective(now)
@@ -614,7 +643,8 @@ class Prober(threading.Thread):
                     continue
                 result = self.pool.probe(account)
                 stamp = datetime.now().strftime("%H:%M:%S")
-                self.events.append(f"{stamp} {account.name} -> {result}")
+                label = "no user:profile scope" if result == "scope" else result
+                self.events.append(f"{stamp} {account.name} -> {label}")
                 self.events[:] = self.events[-4:]
                 if result == "429":
                     self.stop_event.wait(PROBE_GAP)

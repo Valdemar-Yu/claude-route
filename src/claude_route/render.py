@@ -86,6 +86,22 @@ def _history_line(pool: Pool, account: Account, now: float):
     return line
 
 
+def _hints(pool: Pool) -> list[str]:
+    """Explain an empty or probe-less board instead of leaving bare dashes."""
+    hints = []
+    empty = [acc for acc in pool.accounts if acc.age == float("inf")]
+    if empty:
+        names = ", ".join(acc.name for acc in empty)
+        hints.append(f"no usage cache yet for {names}: start a session with "
+                     f"{empty[0].name} (or claude-accounts launch {empty[0].slug}) "
+                     "and its statusline fills it in")
+    denied = [acc.name for acc in pool.accounts if acc.slug in pool.scope_denied]
+    if denied:
+        hints.append(f"usage API refuses {', '.join(denied)}: setup-token tokens "
+                     "have no user:profile scope, so numbers come only from running sessions")
+    return hints
+
+
 def build_renderable(pool: Pool, prober: Prober | None, notice: str = "", width: int = 120):
     from rich.console import Group
     from rich.panel import Panel
@@ -183,7 +199,9 @@ def build_renderable(pool: Pool, prober: Prober | None, notice: str = "", width:
                   style="bold green" if pick else "bold red")
     footer.append("      next probe  ", style="bold grey62")
     upcoming = pool.next_probe(now)
-    if upcoming is None:
+    if upcoming is None and not pool.offline and pool.scope_denied:
+        footer.append("n/a, statusline only", style="grey62")
+    elif upcoming is None:
         footer.append("off", style="yellow")
     elif upcoming[1] <= 1:
         footer.append("eligible now", style="grey62")
@@ -192,6 +210,9 @@ def build_renderable(pool: Pool, prober: Prober | None, notice: str = "", width:
         footer.append(f"{name} in {fmt_duration(wait)}", style="grey62")
     footer.append("      q quit · r probe · p pause · o offline" if not compact
                   else "      q · r · p · o", style="grey50")
+    for hint in _hints(pool):
+        footer.append("\n")
+        footer.append(hint, style="cyan")
     if notice:
         footer.append("\n")
         footer.append(notice, style="yellow")
