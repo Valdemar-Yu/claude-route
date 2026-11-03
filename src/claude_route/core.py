@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .theme import LIGHT_THEME, Theme
+
 USAGE_API = "https://api.anthropic.com/api/oauth/usage"
 ANTHROPIC_BETA = "oauth-2025-04-20"
 SERVICE_PREFIX = "Claude Code Subscription: "
@@ -41,18 +43,19 @@ HISTORY_WINDOW = 60 * 60      # curve / burn-rate lookback
 MIN_BURN_SPAN = 240           # shorter spans are too noisy to extrapolate
 
 BAR_FULL = "\u2588"
+BAR_REST = "\u2588"
 BAR_EMPTY = "\u2591"
 SPARKS = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
 
 
 def configure_glyphs() -> None:
     """Fall back to ASCII when the console encoding cannot carry box glyphs."""
-    global BAR_FULL, BAR_EMPTY, SPARKS
+    global BAR_FULL, BAR_REST, BAR_EMPTY, SPARKS
     encoding = (getattr(sys.stdout, "encoding", None) or "utf-8").lower()
     try:
         "\u2588\u2591\u2581\u2588".encode(encoding)
     except (UnicodeEncodeError, LookupError):
-        BAR_FULL, BAR_EMPTY, SPARKS = "#", "-", ".:-=+*@"
+        BAR_FULL, BAR_REST, BAR_EMPTY, SPARKS = "#", "-", "-", ".:-=+*@"
 
 
 def enable_utf8_console() -> None:
@@ -100,16 +103,9 @@ def make_bar(pct: float | None, width: int = 14) -> str:
     return BAR_FULL * filled + BAR_EMPTY * (width - filled)
 
 
-def severity(pct: float | None) -> str:
-    if pct is None:
-        return "grey50"
-    if pct >= 99.5:
-        return "bold red"
-    if pct >= 80:
-        return "yellow"
-    if pct >= 50:
-        return "bright_green"
-    return "green"
+def severity(pct: float | None, theme: Theme | None = None) -> str:
+    """The severity colour for a percentage, resolved through ``theme``."""
+    return (theme or LIGHT_THEME).severity_style(pct)
 
 
 def parse_reset(value) -> datetime | None:
@@ -258,9 +254,8 @@ class Account:
         return "READY"
 
     @staticmethod
-    def state_color(state: str) -> str:
-        return {"READY": "green", "TIGHT": "yellow",
-                "COOL": "bold red", "UNKNOWN": "grey50"}.get(state, "white")
+    def state_color(state: str, theme: Theme | None = None) -> str:
+        return (theme or LIGHT_THEME).state_color(state)
 
 
 class Store:

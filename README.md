@@ -191,6 +191,7 @@ claude-route --probe --once # 立刻探一次官方接口（受冷却限制）
 | `--base` | claude-accounts 的数据目录；优先使用 `CLAUDE_SUBSCRIPTIONS_DIR`，否则是 `${XDG_CONFIG_HOME:-~/.config}/claude-subscriptions`。Windows 上同样先看 `CLAUDE_SUBSCRIPTIONS_DIR` 和 `XDG_CONFIG_HOME`，都没有则是 `%USERPROFILE%\.config\claude-subscriptions` |
 | `--state-dir` | 探测状态和历史的位置；macOS/Linux 默认 `${XDG_STATE_HOME:-~/.local/state}/claude-route`，Windows 默认 `%LOCALAPPDATA%\claude-route`。若新目录不存在而旧的 `claude-pool-monitor` 存在，会继续使用旧目录 |
 | `--interval` | 重绘间隔，默认 1 秒 |
+| `--theme` | 配色：`auto`（默认）、`light`、`dark`。也读环境变量 `CLAUDE_ROUTE_THEME`，命令行参数优先。`auto` 先看 `COLORFGBG` 的背景色号，再在 POSIX 终端用 OSC 11 查询背景，都拿不到时按浅色 |
 
 ## 读数说明
 

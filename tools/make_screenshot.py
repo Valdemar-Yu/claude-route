@@ -32,59 +32,25 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from claude_route.core import History, Pool, Store  # noqa: E402
 from claude_route.render import build_renderable  # noqa: E402
+from claude_route.theme import THEMES  # noqa: E402
 
 WIDTH = 96
-FONT_PATH = Path(r"C:\Windows\Fonts\DejaVuSansMono_0.ttf")
-BOLD_PATH = Path(r"C:\Windows\Fonts\DejaVuSansMono-Bold_0.ttf")
+FONT_CANDIDATES = (
+    Path(r"C:\Windows\Fonts\DejaVuSansMono_0.ttf"),
+    Path("/System/Library/Fonts/Menlo.ttc"),
+    Path("/System/Library/Fonts/Supplemental/DejaVuSansMono.ttf"),
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
+)
+BOLD_CANDIDATES = (
+    Path(r"C:\Windows\Fonts\DejaVuSansMono-Bold_0.ttf"),
+    Path("/System/Library/Fonts/Menlo.ttc"),  # bold face is the next index
+    Path("/System/Library/Fonts/Supplemental/DejaVuSansMono-Bold.ttf"),
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"),
+)
 FONT_SIZE = 16
 LINE_HEIGHT = 23
 PADDING = 20
 RADIUS = 12
-
-PALETTES = {
-    "light": {
-        "background": (250, 249, 246, 255),
-        "foreground": (47, 47, 47),
-    },
-    "dark": {
-        "background": (27, 27, 27, 255),
-        "foreground": (212, 212, 212),
-    },
-}
-
-PALETTE = PALETTES["light"]
-LIGHT = True
-
-# rich resolves "white", "green" and friends from its own palette, so a Theme
-# override never reaches them: "bold white" stays pure white and disappears on
-# a light background. Remap the resolved RGB instead.
-LIGHT_COLORS = {
-    (255, 255, 255): (31, 31, 31),      # white        -> near black
-    (13, 188, 121): (21, 127, 107),     # green        -> teal
-    (0, 128, 0): (21, 127, 107),
-    (0, 255, 0): (18, 160, 136),        # bright_green
-    (229, 229, 16): (138, 97, 0),       # yellow
-    (255, 255, 0): (138, 97, 0),
-    (205, 49, 49): (191, 59, 43),       # red
-    (241, 76, 76): (191, 59, 43),
-    (255, 0, 0): (191, 59, 43),
-    (17, 168, 205): (15, 126, 168),     # cyan
-    (41, 184, 219): (15, 126, 168),
-    (0, 255, 255): (15, 126, 168),
-}
-
-
-def remap(color: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Flip greys for the light theme and pick readable accents."""
-    if not LIGHT:
-        return color
-    if color in LIGHT_COLORS:
-        return LIGHT_COLORS[color]
-    if max(color) - min(color) <= 12:  # grey ramp, inverted and clamped
-        value = 255 - (sum(color) // 3)
-        value = max(40, min(230, value))
-        return (value, value, value)
-    return color
 
 NAMED = {
     30: (0, 0, 0), 31: (205, 49, 49), 32: (13, 188, 121), 33: (229, 229, 16),
@@ -92,6 +58,11 @@ NAMED = {
     90: (102, 102, 102), 91: (241, 76, 76), 92: (35, 209, 139), 93: (245, 245, 67),
     94: (59, 142, 234), 95: (214, 112, 214), 96: (41, 184, 219), 97: (255, 255, 255),
 }
+
+
+def hex_rgb(color: str) -> tuple[int, int, int]:
+    value = color.lstrip("#")
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
 
 
 def palette_256(index: int) -> tuple[int, int, int]:
@@ -109,9 +80,14 @@ def palette_256(index: int) -> tuple[int, int, int]:
     return grey, grey, grey
 
 
-def parse_ansi(line: str) -> list[tuple[str, tuple[int, int, int], bool]]:
+def parse_ansi(line: str, theme) -> list[tuple[str, tuple[int, int, int], bool]]:
+    """Split one ANSI line into (text, RGB, bold) runs.
+
+    The renderer only emits explicit hex colours, so no palette remapping is
+    needed; the default foreground is the theme's text colour.
+    """
     runs: list[tuple[str, tuple[int, int, int], bool]] = []
-    color = PALETTE["foreground"]
+    color = hex_rgb(theme.text)
     bold = False
     is_default = True
     for chunk in re.split(r"(\x1b\[[0-9;]*m)", line):
@@ -123,13 +99,13 @@ def parse_ansi(line: str) -> list[tuple[str, tuple[int, int, int], bool]]:
             while i < len(codes):
                 code = codes[i]
                 if code == 0:
-                    color, bold, is_default = PALETTE["foreground"], False, True
+                    color, bold, is_default = hex_rgb(theme.text), False, True
                 elif code == 1:
                     bold = True
                 elif code in (21, 22):
                     bold = False
                 elif code == 39:
-                    color, is_default = PALETTE["foreground"], True
+                    color, is_default = hex_rgb(theme.text), True
                 elif code in NAMED:
                     color, is_default = NAMED[code], False
                 elif code == 38 and i + 1 < len(codes):
@@ -143,7 +119,7 @@ def parse_ansi(line: str) -> list[tuple[str, tuple[int, int, int], bool]]:
                         i += 2
                 i += 1
             continue
-        runs.append((chunk, color if is_default else remap(color), bold))
+        runs.append((chunk, color, bold))
     return runs
 
 
@@ -192,18 +168,35 @@ def sample_pool(workdir: Path | str) -> Pool:
     return pool
 
 
-def render_text(pool: Pool, theme_name: str) -> str:
+def render_text(pool: Pool, theme) -> str:
     console = Console(width=WIDTH, record=True, force_terminal=True,
                       color_system="truecolor", highlight=False,
                       file=io.StringIO())
-    console.print(build_renderable(pool, None, width=WIDTH))
+    console.print(build_renderable(pool, None, width=WIDTH, theme=theme))
     return console.export_text(styles=True)
 
 
-def draw(text: str, out: Path) -> None:
+def load_font(candidates, size: int, bold: bool = False):
+    for path in candidates:
+        if not path.is_file():
+            continue
+        index = 1 if bold and path.suffix.lower() == ".ttc" else 0
+        try:
+            return ImageFont.truetype(str(path), size, index=index)
+        except (OSError, ValueError):
+            try:
+                return ImageFont.truetype(str(path), size)
+            except (OSError, ValueError):
+                continue
+    return None
+
+
+def draw(text: str, out: Path, theme) -> None:
     lines = text.rstrip("\n").split("\n")
-    regular = ImageFont.truetype(str(FONT_PATH), FONT_SIZE)
-    bold_font = ImageFont.truetype(str(BOLD_PATH), FONT_SIZE)
+    regular = load_font(FONT_CANDIDATES, FONT_SIZE)
+    if regular is None:
+        raise SystemExit("no usable monospace font found")
+    bold_font = load_font(BOLD_CANDIDATES, FONT_SIZE, bold=True) or regular
 
     probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     char_width = probe.textlength("M", font=regular)
@@ -215,12 +208,12 @@ def draw(text: str, out: Path) -> None:
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw_ctx = ImageDraw.Draw(image)
     draw_ctx.rounded_rectangle([0, 0, width - 1, height - 1], RADIUS,
-                               fill=PALETTE["background"])
+                               fill=theme.background)
 
     for row, line in enumerate(lines):
         x = PADDING
         y = PADDING + row * LINE_HEIGHT + (LINE_HEIGHT - (ascent + descent)) / 2
-        for chunk, color, is_bold in parse_ansi(line):
+        for chunk, color, is_bold in parse_ansi(line, theme):
             draw_ctx.text((x, y), chunk, font=bold_font if is_bold else regular,
                           fill=color + (255,))
             x += char_width * len(chunk)
@@ -231,21 +224,16 @@ def draw(text: str, out: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--theme", choices=sorted(PALETTES), default="light")
+    parser.add_argument("--theme", choices=sorted(THEMES), default="light")
     parser.add_argument("--out", type=Path, default=ROOT / "docs" / "assets" / "dashboard.png")
     args = parser.parse_args()
 
-    global PALETTE, LIGHT
-    PALETTE = PALETTES[args.theme]
-    LIGHT = args.theme == "light"
+    theme = THEMES[args.theme]
 
-    if not FONT_PATH.is_file():
-        print(f"font not found: {FONT_PATH}", file=sys.stderr)
-        return 2
     with tempfile.TemporaryDirectory() as tmp:
         pool = sample_pool(tmp)
-        text = render_text(pool, args.theme)
-    draw(text, args.out)
+        text = render_text(pool, theme)
+    draw(text, args.out, theme)
     return 0
 
 

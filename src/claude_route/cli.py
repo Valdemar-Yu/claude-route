@@ -21,6 +21,7 @@ from .core import (
     enable_utf8_console,
 )
 from .render import build_renderable
+from .theme import THEME_CHOICES, resolve_theme
 
 
 _posix_keyboard_fd: int | None = None
@@ -85,7 +86,7 @@ def restore_keyboard() -> None:
     except (AttributeError, ValueError):
         pass
 
-def print_snapshot(pool: Pool, as_json: bool, width: int = 0) -> None:
+def print_snapshot(pool: Pool, as_json: bool, width: int = 0, theme=None) -> None:
     from rich.console import Console
 
     pool.refresh()
@@ -118,7 +119,8 @@ def print_snapshot(pool: Pool, as_json: bool, width: int = 0) -> None:
                          indent=2, ensure_ascii=False))
         return
     console = Console(width=width or None)
-    console.print(build_renderable(pool, None, width=width or console.width))
+    console.print(build_renderable(pool, None, width=width or console.width,
+                                   theme=theme))
 
 def read_keys() -> list[str]:
     global _posix_escape_state
@@ -163,6 +165,11 @@ def read_keys() -> list[str]:
             # the whole sequence so arrows cannot turn into command keys.
             if byte in (ord("["), ord("O")):
                 _posix_escape_state = 2
+            elif byte == ord("]"):
+                # OSC replies (the startup background query, later answers)
+                # run until BEL or ST; without this, "rgb" would be read as
+                # the r / g / b keys.
+                _posix_escape_state = 3
             elif byte == 0x1B:
                 _posix_escape_state = 1
             else:
@@ -171,6 +178,15 @@ def read_keys() -> list[str]:
         if _posix_escape_state == 2:
             if 0x40 <= byte <= 0x7E:
                 _posix_escape_state = 0
+            continue
+        if _posix_escape_state == 3:
+            if byte == 0x07:
+                _posix_escape_state = 0
+            elif byte == 0x1B:
+                _posix_escape_state = 4
+            continue
+        if _posix_escape_state == 4:
+            _posix_escape_state = 0 if byte == ord("\\") else 3
             continue
         if byte == 0x1B:
             _posix_escape_state = 1
@@ -226,6 +242,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="run one probe round now, then a snapshot")
     parser.add_argument("--width", type=int, default=0, help="force layout width (testing)")
     parser.add_argument("--frames", type=int, default=0, help="stop after N frames (testing)")
+    parser.add_argument("--theme", choices=THEME_CHOICES, default=None,
+                        help="colour theme: auto (default), light, dark; "
+                             "CLAUDE_ROUTE_THEME is the fallback")
     args = parser.parse_args(argv)
 
     try:
@@ -250,6 +269,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no accounts found under {base}", file=sys.stderr)
         return 2
 
+    # Resolving the theme may briefly take stdin to cbreak for the OSC 11
+    # query, so it must finish before start_keyboard() takes over stdin.
+    theme = resolve_theme(args.theme, allow_query=not args.json)
+
     if args.probe:
         pool.refresh()
         for account in pool.accounts:
@@ -259,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"probe {account.name}: skipped (budget or fresh cache)")
 
     if args.once or args.json:
-        print_snapshot(pool, args.json, args.width)
+        print_snapshot(pool, args.json, args.width, theme)
         return 0
 
     from rich.console import Console
@@ -275,7 +298,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if prober:
             prober.start()
-        with Live(build_renderable(pool, prober, width=args.width or console.width),
+        with Live(build_renderable(pool, prober, width=args.width or console.width,
+                                   theme=theme),
                   console=console, refresh_per_second=4, screen=True) as live:
             while True:
                 for key in read_keys():
@@ -304,7 +328,8 @@ def main(argv: list[str] | None = None) -> int:
                 if not paused:
                     pool.refresh()
                 live.update(build_renderable(pool, prober, notice,
-                                             width=args.width or console.width))
+                                             width=args.width or console.width,
+                                             theme=theme))
                 frames += 1
                 if args.frames and frames >= args.frames:
                     break
