@@ -18,6 +18,18 @@
 2. 两个账号在同一时刻都被限，说明限流至少部分是出口 IP 级别的，不只是 token 级别的。加账号不会增加探测预算。
 3. 第一次探测就已经是 429，说明 Claude Code 会话自己的 statusline 也在打这个接口，我们只是排在后面。
 
+## token 权限
+
+2026-11-03 在 macOS 上用 `claude-accounts add` 新加的两个账号实测，接口返回：
+
+```
+HTTP 403 permission_error
+OAuth token does not meet scope requirement user:profile
+error_code: oauth_scope_insufficient
+```
+
+`claude setup-token` 生成的长期 token 只有推理权限，没有 `user:profile`，查不了这个接口。claude-route 收到这种 403 后，把账号记进状态文件的 `scope_denied`，24 小时内不再探测，界面提示数字只能来自运行中的会话；其他 403 仍按普通错误处理。同一时段对同一账号重复请求时，接口会先回 429（`Retry-After` 3600 秒），所以权限问题不一定在第一次探测时暴露。
+
 ## 因此的取数顺序
 
 ```

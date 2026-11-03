@@ -295,6 +295,9 @@ def main(argv: list[str] | None = None) -> int:
                                        if time.time() >= pool.next_allowed.get(a.slug, 0.0)]
                             if pending:
                                 notice = f"probe {pending[0].name}: {pool.probe(pending[0])}"
+                            elif pool.accounts and all(a.slug in pool.scope_denied
+                                                       for a in pool.accounts):
+                                notice = "probe unavailable: tokens lack user:profile scope"
                             else:
                                 notice = "probe budget spent"
 

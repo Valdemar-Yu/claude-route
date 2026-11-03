@@ -218,6 +218,8 @@ Claude Code 会话
 
 接口只在缓存超过 10 分钟没更新时才兜底，每个账号 45 分钟最多一次，全局错峰 90 秒，收到 429 就把 `Retry-After` 记进状态文件，到点前完全静默。两条路径都不产生推理请求，不消耗 5h/7d 额度。实测记录见 [docs/rate-limits.md](docs/rate-limits.md)。
 
+兜底探测有一个前提：token 要带 `user:profile` 权限。`claude-accounts add` 存的是 `claude setup-token` 生成的一年期 token，只有推理权限，接口会回 403 `oauth_scope_insufficient`。这时 claude-route 把该账号标记为只读缓存，24 小时内不再探测，界面上写明原因。所以用 claude-accounts 管理的账号，数字全部来自正在运行的会话：账号至少要用 `claude-<后缀>` 开过一次会话，看板才有数据。
+
 ## 边界
 
 - 只读。claude-route 不写 claude-accounts 的 `accounts.tsv`、`tokens.json`、`usage/` 或 `configs/`，也不写 Keychain，探测结果存在自己的状态目录。
